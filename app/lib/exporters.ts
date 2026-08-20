@@ -1,5 +1,5 @@
 import type { DielinePath, DielineScene, LayoutResult, ProjectDocument } from "./dieline";
-import { pathToSvg } from "./dieline";
+import { flattenPath, pathToSvg } from "./dieline";
 
 const roleStyle = {
   "outer-cut": { stroke: "#e34b4b", dash: "" },
@@ -44,7 +44,7 @@ export function downloadSvg(scene: DielineScene, layout: LayoutResult, project: 
 }
 
 function pathPoints(path: DielinePath): Array<{ x: number; y: number }> {
-  return path.commands.flatMap((command) => command.op === "close" ? [] : [{ x: command.point.x / 1000, y: command.point.y / 1000 }]);
+  return flattenPath(path).map((point) => ({ x: point.x / 1000, y: point.y / 1000 }));
 }
 
 export async function downloadPdf(scene: DielineScene, layout: LayoutResult, project: ProjectDocument): Promise<void> {
@@ -71,14 +71,32 @@ export function serializeDxf(scene: DielineScene): string {
   const lines = ["0", "SECTION", "2", "HEADER", "9", "$INSUNITS", "70", "4", "0", "ENDSEC", "0", "SECTION", "2", "TABLES", "0", "ENDSEC", "0", "SECTION", "2", "ENTITIES"];
   const layerFor = (role: DielinePath["role"]) => role === "crease" ? "CREASE" : role === "perforation" ? "PERF" : role === "glue-boundary" ? "GLUE" : "CUT";
   for (const path of scene.paths.filter((item) => item.manufacturable)) {
-    const pts = pathPoints(path);
-    for (let i = 1; i < pts.length; i += 1) {
-      const a = pts[i - 1]!, b = pts[i]!;
-      lines.push("0", "LINE", "8", layerFor(path.role), "10", a.x.toFixed(6), "20", (-a.y).toFixed(6), "30", "0", "11", b.x.toFixed(6), "21", (-b.y).toFixed(6), "31", "0");
-    }
-    if (path.commands.at(-1)?.op === "close" && pts.length > 2) {
-      const a = pts.at(-1)!, b = pts[0]!;
-      lines.push("0", "LINE", "8", layerFor(path.role), "10", a.x.toFixed(6), "20", (-a.y).toFixed(6), "30", "0", "11", b.x.toFixed(6), "21", (-b.y).toFixed(6), "31", "0");
+    const layer = layerFor(path.role);
+    let first: { x: number; y: number } | undefined;
+    let current: { x: number; y: number } | undefined;
+    for (const command of path.commands) {
+      if (command.op === "move") { current = { x: command.point.x / 1000, y: command.point.y / 1000 }; first = current; continue; }
+      if (command.op === "line" && current) {
+        const next = { x: command.point.x / 1000, y: command.point.y / 1000 };
+        lines.push("0", "LINE", "8", layer, "10", current.x.toFixed(6), "20", (-current.y).toFixed(6), "30", "0", "11", next.x.toFixed(6), "21", (-next.y).toFixed(6), "31", "0");
+        current = next; continue;
+      }
+      if (command.op === "arc") {
+        const sceneStart = command.startMilliDegrees / 1000;
+        const sceneSweep = command.sweepMilliDegrees / 1000;
+        const mappedSweep = -sceneSweep;
+        let start = -sceneStart;
+        if (mappedSweep < 0) start = -(sceneStart + sceneSweep);
+        const end = start + Math.abs(mappedSweep);
+        const normalize = (angle: number) => ((angle % 360) + 360) % 360;
+        lines.push("0", "ARC", "8", layer, "10", (command.center.x / 1000).toFixed(6), "20", (-command.center.y / 1000).toFixed(6), "30", "0", "40", (command.radiusUm / 1000).toFixed(6), "50", normalize(start).toFixed(6), "51", normalize(end).toFixed(6));
+        const endAngle = (command.startMilliDegrees + command.sweepMilliDegrees) / 1000 * Math.PI / 180;
+        current = { x: (command.center.x + command.radiusUm * Math.cos(endAngle)) / 1000, y: (command.center.y + command.radiusUm * Math.sin(endAngle)) / 1000 };
+        continue;
+      }
+      if (command.op === "close" && current && first) {
+        lines.push("0", "LINE", "8", layer, "10", current.x.toFixed(6), "20", (-current.y).toFixed(6), "30", "0", "11", first.x.toFixed(6), "21", (-first.y).toFixed(6), "31", "0");
+      }
     }
   }
   lines.push("0", "ENDSEC", "0", "EOF");

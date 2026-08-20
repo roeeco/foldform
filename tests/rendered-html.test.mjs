@@ -24,7 +24,13 @@ test("server renders the Foldform parametric editor", async () => {
 test("core model keeps project parameters authoritative", async () => {
   const source = await readFile(new URL("../app/lib/dieline.ts", import.meta.url), "utf8");
   assert.match(source, /type Micrometres/);
-  assert.match(source, /generateStraightTuck/);
+  assert.match(source, /generateTuckCarton/);
+  assert.match(source, /generateBoxWithLid/);
+  assert.match(source, /generateMatchBox/);
+  assert.match(source, /generateCrashLockCarton/);
+  assert.match(source, /generateAutoLockCarton/);
+  assert.match(source, /generateCakeSliceBox/);
+  assert.match(source, /generateProjectScene/);
   assert.match(source, /assertSceneIntegrity/);
   assert.match(source, /stable ID|Duplicate semantic path ID/);
   assert.doesNotMatch(source, /Math\.random|Date\.now/);
