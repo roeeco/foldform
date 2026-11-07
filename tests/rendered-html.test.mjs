@@ -23,6 +23,8 @@ test("server renders the Foldform parametric editor", async () => {
 
 test("core model keeps project parameters authoritative", async () => {
   const source = await readFile(new URL("../app/lib/dieline.ts", import.meta.url), "utf8");
+  const editorSource = await readFile(new URL("../app/Editor.tsx", import.meta.url), "utf8");
+  const storeSource = await readFile(new URL("../app/lib/store.ts", import.meta.url), "utf8");
   assert.match(source, /type Micrometres/);
   assert.match(source, /generateTuckCarton/);
   assert.match(source, /generateBoxWithLid/);
@@ -30,8 +32,21 @@ test("core model keeps project parameters authoritative", async () => {
   assert.match(source, /generateCrashLockCarton/);
   assert.match(source, /generateAutoLockCarton/);
   assert.match(source, /generateCakeSliceBox/);
+  assert.match(source, /generateTrapezoidBox/);
+  assert.match(source, /generateBag/);
+  assert.match(source, /generateEnvelope/);
+  assert.match(source, /generatePillowPack/);
+  assert.match(source, /topFold/);
+  assert.match(source, /roundedTipCommands/);
+  assert.match(source, /fold-over-tuck/);
+  assert.match(source, /fold-over-lock/);
   assert.match(source, /generateProjectScene/);
   assert.match(source, /assertSceneIntegrity/);
   assert.match(source, /stable ID|Duplicate semantic path ID/);
   assert.doesNotMatch(source, /Math\.random|Date\.now/);
+  assert.match(editorSource, /active-parameter-glow/);
+  assert.match(editorSource, /Decrease \$\{label\} by 1 millimetre/);
+  assert.doesNotMatch(editorSource, /dimension-popover|data-layer="dimensions"|activationToken/);
+  assert.match(storeSource, /id === "box-with-lid" \|\| id === "cake-slice-box" \|\| id === "trapezoid-box"/);
+  assert.match(storeSource, /: 90_000/);
 });

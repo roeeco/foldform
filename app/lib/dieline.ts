@@ -1,18 +1,20 @@
 import Fraction from "fraction.js";
 import { z } from "zod";
 import {
-  assertNetTopology, buildLockBottom, buildPanelBand, buildProfileTray, buildRectangularTray,
+  assertNetTopology, buildLockBottom, buildPanelBand, buildProfileTray, buildRectangularTray, buildTaperedBox,
   type FoldConnection, type NetFace, type NetPart,
 } from "./template-kernel";
 
 export type Micrometres = number & { readonly __brand: "Micrometres" };
 export type Unit = "mm" | "cm" | "in";
-export type TemplateId = "tuck-end-carton" | "crash-lock-carton" | "auto-lock-bottom" | "box-with-lid" | "match-box" | "cake-slice-box";
+export type TemplateId = "tuck-end-carton" | "crash-lock-carton" | "auto-lock-bottom" | "box-with-lid" | "match-box" | "cake-slice-box" | "trapezoid-box" | "bag" | "envelope" | "pillow-pack";
 export type ParameterId =
   | "width" | "depth" | "height" | "lidHeight"
+  | "topLength" | "bottomLength" | "topWidth" | "bottomWidth"
   | "tuckFlap" | "dustFlap" | "glueFlap"
   | "thumbHole" | "cornerRadius" | "clearance"
-  | "bottomFlap" | "lockOverlap";
+  | "bottomFlap" | "lockOverlap" | "lockTab"
+  | "gusset" | "topFold" | "overlap";
 export type LineRole =
   | "outer-cut" | "internal-cut" | "crease" | "perforation"
   | "glue-boundary" | "annotation";
@@ -69,8 +71,8 @@ export interface DielineScene {
 }
 
 export interface ProjectDocument {
-  schemaVersion: 6;
-  engineVersion: "0.7.0";
+  schemaVersion: 10;
+  engineVersion: "1.1.0";
   projectId: string;
   name: string;
   template: { id: TemplateId; version: "1.0.0" | "2.0.0" };
@@ -82,6 +84,7 @@ export interface ProjectDocument {
     glueAngleMilliDegrees: number;
     dustTaperPercent: number;
     sliceAngleMilliDegrees: number;
+    wallConstruction: "single-wall" | "fold-over-tuck" | "fold-over-lock";
   };
   material: { thicknessUm: Micrometres; kerfUm: Micrometres; scoreAllowanceUm: Micrometres };
   sheet: {
@@ -113,25 +116,105 @@ export const um = (value: number): Micrometres => {
 
 export const PARAMETER_LIMITS: Record<ParameterId, readonly [number, number]> = {
   width: [20_000, 500_000], depth: [8_000, 300_000], height: [5_000, 700_000], lidHeight: [5_000, 300_000],
+  topLength: [20_000, 500_000], bottomLength: [20_000, 500_000], topWidth: [8_000, 300_000], bottomWidth: [8_000, 300_000],
   tuckFlap: [4_000, 120_000], dustFlap: [4_000, 180_000], glueFlap: [5_000, 60_000],
   thumbHole: [2_000, 80_000], cornerRadius: [500, 40_000], clearance: [250, 5_000],
   bottomFlap: [6_000, 180_000], lockOverlap: [3_000, 60_000],
+  lockTab: [2_000, 20_000],
+  gusset: [3_000, 100_000], topFold: [0, 100_000], overlap: [3_000, 100_000],
 };
 
 const parametersSchema = z.object({
   width: z.number().int().safe(), depth: z.number().int().safe(), height: z.number().int().safe(), lidHeight: z.number().int().safe(),
+  topLength: z.number().int().safe(), bottomLength: z.number().int().safe(), topWidth: z.number().int().safe(), bottomWidth: z.number().int().safe(),
   tuckFlap: z.number().int().safe(), dustFlap: z.number().int().safe(), glueFlap: z.number().int().safe(),
   thumbHole: z.number().int().safe(), cornerRadius: z.number().int().safe(), clearance: z.number().int().safe(),
   bottomFlap: z.number().int().safe(), lockOverlap: z.number().int().safe(),
+  lockTab: z.number().int().safe(),
+  gusset: z.number().int().safe(), topFold: z.number().int().safe(), overlap: z.number().int().safe(),
 });
 
 const projectSchema = z.object({
-  schemaVersion: z.literal(6), engineVersion: z.literal("0.7.0"), projectId: z.string().min(1), name: z.string().min(1).max(120),
-  template: z.object({ id: z.enum(["tuck-end-carton", "crash-lock-carton", "auto-lock-bottom", "box-with-lid", "match-box", "cake-slice-box"]), version: z.enum(["1.0.0", "2.0.0"]) }),
+  schemaVersion: z.literal(10), engineVersion: z.literal("1.1.0"), projectId: z.string().min(1), name: z.string().min(1).max(120),
+  template: z.object({ id: z.enum(["tuck-end-carton", "crash-lock-carton", "auto-lock-bottom", "box-with-lid", "match-box", "cake-slice-box", "trapezoid-box", "bag", "envelope", "pillow-pack"]), version: z.enum(["1.0.0", "2.0.0"]) }),
   parameters: parametersSchema,
   construction: z.object({
     openingStyle: z.enum(["straight-tuck", "reverse-tuck"]), tuckPanel: z.enum(["front", "back"]),
-    lockStyle: z.enum(["friction", "slit-lock"]), glueAngleMilliDegrees: z.number().int().min(45_000).max(89_000),
+    lockStyle: z.enum(["friction", "slit-lock"]), glueAngleMilliDegrees: z.number().int().min(45_000).max(90_000),
+    dustTaperPercent: z.number().int().min(0).max(40), sliceAngleMilliDegrees: z.number().int().min(15_000).max(90_000),
+    wallConstruction: z.enum(["single-wall", "fold-over-tuck", "fold-over-lock"]),
+  }),
+  material: z.object({ thicknessUm: z.number().int().min(100).max(10_000), kerfUm: z.number().int().safe(), scoreAllowanceUm: z.number().int().safe() }),
+  sheet: z.object({
+    preset: z.enum(["600x400", "700x500", "Custom"]), widthUm: z.number().int().min(50_000).max(2_000_000), heightUm: z.number().int().min(50_000).max(2_000_000),
+    marginUm: z.number().int().safe(), orientation: z.enum(["portrait", "landscape", "auto"]),
+  }),
+  exportProfile: z.object({ creaseMode: z.enum(["line", "dash", "perforation"]), includeDimensions: z.boolean() }),
+  display: z.object({ unit: z.enum(["mm", "cm", "in"]), precision: z.number().int().min(0).max(4) }),
+});
+
+const priorV9ParametersSchema = parametersSchema.omit({ topFold: true });
+const priorV9ProjectSchema = z.object({
+  schemaVersion: z.literal(9), engineVersion: z.literal("1.0.0"), projectId: z.string().min(1), name: z.string().min(1).max(120),
+  template: z.object({ id: z.enum(["tuck-end-carton", "crash-lock-carton", "auto-lock-bottom", "box-with-lid", "match-box", "cake-slice-box", "trapezoid-box", "bag", "envelope", "pillow-pack"]), version: z.enum(["1.0.0", "2.0.0"]) }),
+  parameters: priorV9ParametersSchema,
+  construction: z.object({
+    openingStyle: z.enum(["straight-tuck", "reverse-tuck"]), tuckPanel: z.enum(["front", "back"]),
+    lockStyle: z.enum(["friction", "slit-lock"]), glueAngleMilliDegrees: z.number().int().min(45_000).max(90_000),
+    dustTaperPercent: z.number().int().min(0).max(40), sliceAngleMilliDegrees: z.number().int().min(15_000).max(90_000),
+    wallConstruction: z.enum(["single-wall", "fold-over-tuck", "fold-over-lock"]),
+  }),
+  material: z.object({ thicknessUm: z.number().int().min(100).max(10_000), kerfUm: z.number().int().safe(), scoreAllowanceUm: z.number().int().safe() }),
+  sheet: z.object({ preset: z.enum(["600x400", "700x500", "Custom"]), widthUm: z.number().int().min(50_000).max(2_000_000), heightUm: z.number().int().min(50_000).max(2_000_000), marginUm: z.number().int().safe(), orientation: z.enum(["portrait", "landscape", "auto"]) }),
+  exportProfile: z.object({ creaseMode: z.enum(["line", "dash", "perforation"]), includeDimensions: z.boolean() }),
+  display: z.object({ unit: z.enum(["mm", "cm", "in"]), precision: z.number().int().min(0).max(4) }),
+});
+
+const priorV8ParametersSchema = priorV9ParametersSchema.omit({ gusset: true, overlap: true });
+const priorV8ProjectSchema = z.object({
+  schemaVersion: z.literal(8), engineVersion: z.literal("0.9.0"), projectId: z.string().min(1), name: z.string().min(1).max(120),
+  template: z.object({ id: z.enum(["tuck-end-carton", "crash-lock-carton", "auto-lock-bottom", "box-with-lid", "match-box", "cake-slice-box", "trapezoid-box"]), version: z.enum(["1.0.0", "2.0.0"]) }),
+  parameters: priorV8ParametersSchema,
+  construction: z.object({
+    openingStyle: z.enum(["straight-tuck", "reverse-tuck"]), tuckPanel: z.enum(["front", "back"]),
+    lockStyle: z.enum(["friction", "slit-lock"]), glueAngleMilliDegrees: z.number().int().min(45_000).max(90_000),
+    dustTaperPercent: z.number().int().min(0).max(40), sliceAngleMilliDegrees: z.number().int().min(15_000).max(90_000),
+    wallConstruction: z.enum(["single-wall", "fold-over-tuck", "fold-over-lock"]),
+  }),
+  material: z.object({ thicknessUm: z.number().int().min(100).max(10_000), kerfUm: z.number().int().safe(), scoreAllowanceUm: z.number().int().safe() }),
+  sheet: z.object({ preset: z.enum(["600x400", "700x500", "Custom"]), widthUm: z.number().int().min(50_000).max(2_000_000), heightUm: z.number().int().min(50_000).max(2_000_000), marginUm: z.number().int().safe(), orientation: z.enum(["portrait", "landscape", "auto"]) }),
+  exportProfile: z.object({ creaseMode: z.enum(["line", "dash", "perforation"]), includeDimensions: z.boolean() }),
+  display: z.object({ unit: z.enum(["mm", "cm", "in"]), precision: z.number().int().min(0).max(4) }),
+});
+
+const priorV7ParametersSchema = priorV8ParametersSchema.omit({ topLength: true, bottomLength: true, topWidth: true, bottomWidth: true });
+const priorV7ProjectSchema = z.object({
+  schemaVersion: z.literal(7), engineVersion: z.literal("0.8.0"), projectId: z.string().min(1), name: z.string().min(1).max(120),
+  template: z.object({ id: z.enum(["tuck-end-carton", "crash-lock-carton", "auto-lock-bottom", "box-with-lid", "match-box", "cake-slice-box"]), version: z.enum(["1.0.0", "2.0.0"]) }),
+  parameters: priorV7ParametersSchema,
+  construction: z.object({
+    openingStyle: z.enum(["straight-tuck", "reverse-tuck"]), tuckPanel: z.enum(["front", "back"]),
+    lockStyle: z.enum(["friction", "slit-lock"]), glueAngleMilliDegrees: z.number().int().min(45_000).max(90_000),
+    dustTaperPercent: z.number().int().min(0).max(40), sliceAngleMilliDegrees: z.number().int().min(15_000).max(90_000),
+    wallConstruction: z.enum(["single-wall", "fold-over-tuck", "fold-over-lock"]),
+  }),
+  material: z.object({ thicknessUm: z.number().int().min(100).max(10_000), kerfUm: z.number().int().safe(), scoreAllowanceUm: z.number().int().safe() }),
+  sheet: z.object({
+    preset: z.enum(["600x400", "700x500", "Custom"]), widthUm: z.number().int().min(50_000).max(2_000_000), heightUm: z.number().int().min(50_000).max(2_000_000),
+    marginUm: z.number().int().safe(), orientation: z.enum(["portrait", "landscape", "auto"]),
+  }),
+  exportProfile: z.object({ creaseMode: z.enum(["line", "dash", "perforation"]), includeDimensions: z.boolean() }),
+  display: z.object({ unit: z.enum(["mm", "cm", "in"]), precision: z.number().int().min(0).max(4) }),
+});
+
+const priorV6ParametersSchema = priorV7ParametersSchema.omit({ lockTab: true });
+const priorV6ProjectSchema = z.object({
+  schemaVersion: z.literal(6), engineVersion: z.literal("0.7.0"), projectId: z.string().min(1), name: z.string().min(1).max(120),
+  template: z.object({ id: z.enum(["tuck-end-carton", "crash-lock-carton", "auto-lock-bottom", "box-with-lid", "match-box", "cake-slice-box"]), version: z.enum(["1.0.0", "2.0.0"]) }),
+  parameters: priorV6ParametersSchema,
+  construction: z.object({
+    openingStyle: z.enum(["straight-tuck", "reverse-tuck"]), tuckPanel: z.enum(["front", "back"]),
+    lockStyle: z.enum(["friction", "slit-lock"]), glueAngleMilliDegrees: z.number().int().min(45_000).max(90_000),
     dustTaperPercent: z.number().int().min(0).max(40), sliceAngleMilliDegrees: z.number().int().min(15_000).max(90_000),
   }),
   material: z.object({ thicknessUm: z.number().int().min(100).max(10_000), kerfUm: z.number().int().safe(), scoreAllowanceUm: z.number().int().safe() }),
@@ -143,10 +226,10 @@ const projectSchema = z.object({
   display: z.object({ unit: z.enum(["mm", "cm", "in"]), precision: z.number().int().min(0).max(4) }),
 });
 
-const priorV5ParametersSchema = parametersSchema.omit({ bottomFlap: true, lockOverlap: true });
+const priorV5ParametersSchema = priorV6ParametersSchema.omit({ bottomFlap: true, lockOverlap: true });
 const priorConstructionSchema = z.object({
   openingStyle: z.enum(["straight-tuck", "reverse-tuck"]), tuckPanel: z.enum(["front", "back"]),
-  lockStyle: z.enum(["friction", "slit-lock"]), glueAngleMilliDegrees: z.number().int().min(45_000).max(89_000),
+  lockStyle: z.enum(["friction", "slit-lock"]), glueAngleMilliDegrees: z.number().int().min(45_000).max(90_000),
   dustTaperPercent: z.number().int().min(0).max(40),
 });
 const priorV5ProjectSchema = z.object({
@@ -221,15 +304,22 @@ const legacyProjectSchema = z.object({
   display: z.object({ unit: z.enum(["mm", "cm", "in"]), precision: z.number() }),
 }).passthrough();
 
+const TAPERED_DEFAULT_PARAMETERS = {
+  topLength: um(70_000), bottomLength: um(40_000), topWidth: um(40_000), bottomWidth: um(30_000),
+} as const;
+const FAMILY_DEFAULT_PARAMETERS = { gusset: um(20_000), topFold: um(20_000), overlap: um(12_000) } as const;
+
 export const DEFAULT_PROJECT: ProjectDocument = {
-  schemaVersion: 6, engineVersion: "0.7.0", projectId: "project-tuck-carton-001", name: "Untitled carton",
+  schemaVersion: 10, engineVersion: "1.1.0", projectId: "project-tuck-carton-001", name: "Untitled carton",
   template: { id: "tuck-end-carton", version: "2.0.0" },
   parameters: {
     width: um(60_000), depth: um(30_000), height: um(90_000), lidHeight: um(40_000), tuckFlap: um(20_000), dustFlap: um(25_000),
+    ...TAPERED_DEFAULT_PARAMETERS,
+    ...FAMILY_DEFAULT_PARAMETERS,
     glueFlap: um(15_000), thumbHole: um(10_000), cornerRadius: um(8_000), clearance: um(1_000),
-    bottomFlap: um(28_000), lockOverlap: um(10_000),
+    bottomFlap: um(28_000), lockOverlap: um(10_000), lockTab: um(6_000),
   },
-  construction: { openingStyle: "reverse-tuck", tuckPanel: "front", lockStyle: "slit-lock", glueAngleMilliDegrees: 80_000, dustTaperPercent: 20, sliceAngleMilliDegrees: 30_000 },
+  construction: { openingStyle: "reverse-tuck", tuckPanel: "front", lockStyle: "slit-lock", glueAngleMilliDegrees: 90_000, dustTaperPercent: 20, sliceAngleMilliDegrees: 30_000, wallConstruction: "single-wall" },
   material: { thicknessUm: um(500), kerfUm: um(150), scoreAllowanceUm: um(650) },
   sheet: { preset: "600x400", widthUm: um(600_000), heightUm: um(400_000), marginUm: um(8_000), orientation: "auto" },
   exportProfile: { creaseMode: "dash", includeDimensions: false }, display: { unit: "mm", precision: 1 },
@@ -238,35 +328,53 @@ export const DEFAULT_PROJECT: ProjectDocument = {
 export function validateProject(value: unknown): ProjectDocument {
   const current = projectSchema.safeParse(value);
   if (current.success) return current.data as ProjectDocument;
+  const priorV9 = priorV9ProjectSchema.safeParse(value);
+  if (priorV9.success) return projectSchema.parse({ ...priorV9.data, schemaVersion: 10, engineVersion: "1.1.0", parameters: { ...priorV9.data.parameters, topFold: FAMILY_DEFAULT_PARAMETERS.topFold } }) as ProjectDocument;
+  const priorV8 = priorV8ProjectSchema.safeParse(value);
+  if (priorV8.success) return projectSchema.parse({ ...priorV8.data, schemaVersion: 10, engineVersion: "1.1.0", parameters: { ...priorV8.data.parameters, ...FAMILY_DEFAULT_PARAMETERS } }) as ProjectDocument;
+  const priorV7 = priorV7ProjectSchema.safeParse(value);
+  if (priorV7.success) return projectSchema.parse({
+    ...priorV7.data, schemaVersion: 10, engineVersion: "1.1.0",
+    parameters: { ...priorV7.data.parameters, ...TAPERED_DEFAULT_PARAMETERS, ...FAMILY_DEFAULT_PARAMETERS },
+  }) as ProjectDocument;
+  const priorV6 = priorV6ProjectSchema.safeParse(value);
+  if (priorV6.success) return projectSchema.parse({
+    ...priorV6.data, schemaVersion: 10, engineVersion: "1.1.0",
+    parameters: { ...priorV6.data.parameters, lockTab: DEFAULT_PROJECT.parameters.lockTab, ...TAPERED_DEFAULT_PARAMETERS, ...FAMILY_DEFAULT_PARAMETERS },
+    construction: { ...priorV6.data.construction, wallConstruction: "single-wall" },
+  }) as ProjectDocument;
   const priorV5 = priorV5ProjectSchema.safeParse(value);
   if (priorV5.success) return projectSchema.parse({
-    ...priorV5.data, schemaVersion: 6, engineVersion: "0.7.0",
-    parameters: { ...priorV5.data.parameters, bottomFlap: DEFAULT_PROJECT.parameters.bottomFlap, lockOverlap: DEFAULT_PROJECT.parameters.lockOverlap },
-    construction: { ...priorV5.data.construction, sliceAngleMilliDegrees: DEFAULT_PROJECT.construction.sliceAngleMilliDegrees },
+    ...priorV5.data, schemaVersion: 10, engineVersion: "1.1.0",
+    parameters: { ...priorV5.data.parameters, bottomFlap: DEFAULT_PROJECT.parameters.bottomFlap, lockOverlap: DEFAULT_PROJECT.parameters.lockOverlap, lockTab: DEFAULT_PROJECT.parameters.lockTab, ...TAPERED_DEFAULT_PARAMETERS, ...FAMILY_DEFAULT_PARAMETERS },
+    construction: { ...priorV5.data.construction, sliceAngleMilliDegrees: DEFAULT_PROJECT.construction.sliceAngleMilliDegrees, wallConstruction: "single-wall" },
   }) as ProjectDocument;
   const priorV4 = priorV4ProjectSchema.safeParse(value);
   if (priorV4.success) return projectSchema.parse({
-    ...priorV4.data, schemaVersion: 6, engineVersion: "0.7.0",
-    parameters: { ...priorV4.data.parameters, bottomFlap: DEFAULT_PROJECT.parameters.bottomFlap, lockOverlap: DEFAULT_PROJECT.parameters.lockOverlap },
+    ...priorV4.data, schemaVersion: 10, engineVersion: "1.1.0",
+    parameters: { ...priorV4.data.parameters, bottomFlap: DEFAULT_PROJECT.parameters.bottomFlap, lockOverlap: DEFAULT_PROJECT.parameters.lockOverlap, lockTab: DEFAULT_PROJECT.parameters.lockTab, ...TAPERED_DEFAULT_PARAMETERS, ...FAMILY_DEFAULT_PARAMETERS },
     construction: {
       ...priorV4.data.construction,
-      glueAngleMilliDegrees: priorV4.data.template.id === "tuck-end-carton" ? priorV4.data.construction.glueAngleMilliDegrees : 45_000,
+      glueAngleMilliDegrees: priorV4.data.template.id === "tuck-end-carton"
+        ? priorV4.data.construction.glueAngleMilliDegrees
+        : priorV4.data.template.id === "match-box" ? 90_000 : 45_000,
       sliceAngleMilliDegrees: DEFAULT_PROJECT.construction.sliceAngleMilliDegrees,
+      wallConstruction: "single-wall",
     },
   }) as ProjectDocument;
   const priorV3 = priorV3ProjectSchema.safeParse(value);
   if (priorV3.success) return projectSchema.parse({
-    ...priorV3.data, schemaVersion: 6, engineVersion: "0.7.0",
-    parameters: { ...priorV3.data.parameters, lidHeight: DEFAULT_PROJECT.parameters.lidHeight, bottomFlap: DEFAULT_PROJECT.parameters.bottomFlap, lockOverlap: DEFAULT_PROJECT.parameters.lockOverlap },
-    construction: { ...priorV3.data.construction, sliceAngleMilliDegrees: DEFAULT_PROJECT.construction.sliceAngleMilliDegrees },
+    ...priorV3.data, schemaVersion: 10, engineVersion: "1.1.0",
+    parameters: { ...priorV3.data.parameters, lidHeight: DEFAULT_PROJECT.parameters.lidHeight, bottomFlap: DEFAULT_PROJECT.parameters.bottomFlap, lockOverlap: DEFAULT_PROJECT.parameters.lockOverlap, lockTab: DEFAULT_PROJECT.parameters.lockTab, ...TAPERED_DEFAULT_PARAMETERS, ...FAMILY_DEFAULT_PARAMETERS },
+    construction: { ...priorV3.data.construction, sliceAngleMilliDegrees: DEFAULT_PROJECT.construction.sliceAngleMilliDegrees, wallConstruction: "single-wall" },
   }) as ProjectDocument;
   const prior = priorV2ProjectSchema.safeParse(value);
   if (prior.success) return projectSchema.parse({
     ...prior.data,
-    schemaVersion: 6,
-    engineVersion: "0.7.0",
-    parameters: { ...prior.data.parameters, lidHeight: DEFAULT_PROJECT.parameters.lidHeight, bottomFlap: DEFAULT_PROJECT.parameters.bottomFlap, lockOverlap: DEFAULT_PROJECT.parameters.lockOverlap },
-    construction: { ...prior.data.construction, sliceAngleMilliDegrees: DEFAULT_PROJECT.construction.sliceAngleMilliDegrees },
+    schemaVersion: 10,
+    engineVersion: "1.1.0",
+    parameters: { ...prior.data.parameters, lidHeight: DEFAULT_PROJECT.parameters.lidHeight, bottomFlap: DEFAULT_PROJECT.parameters.bottomFlap, lockOverlap: DEFAULT_PROJECT.parameters.lockOverlap, lockTab: DEFAULT_PROJECT.parameters.lockTab, ...TAPERED_DEFAULT_PARAMETERS, ...FAMILY_DEFAULT_PARAMETERS },
+    construction: { ...prior.data.construction, sliceAngleMilliDegrees: DEFAULT_PROJECT.construction.sliceAngleMilliDegrees, wallConstruction: "single-wall" },
     sheet: { ...DEFAULT_PROJECT.sheet, marginUm: prior.data.sheet.marginUm, orientation: prior.data.sheet.orientation },
     material: { ...prior.data.material, scoreAllowanceUm: estimateScoreAllowance(um(prior.data.material.thicknessUm)) },
   }) as ProjectDocument;
@@ -295,7 +403,7 @@ export function parseMeasurement(raw: string, fallbackUnit: Unit): { ok: true; v
     const mixed = numeric.match(/^([+-]?\d+)\s+(\d+)\/(\d+)$/);
     const fraction = mixed ? new Fraction(Number(mixed[1])).add(new Fraction(Number(mixed[2]), Number(mixed[3]))) : new Fraction(numeric);
     const result = Math.round(fraction.valueOf() * UNIT_TO_UM[unit]);
-    if (!Number.isSafeInteger(result) || result <= 0) return { ok: false, message: "Use a positive, practical measurement" };
+    if (!Number.isSafeInteger(result) || result < 0) return { ok: false, message: "Use a non-negative, practical measurement" };
     return { ok: true, value: um(result) };
   } catch { return { ok: false, message: "Try 80 mm, 3.25 in, or 3 1/4 in" }; }
 }
@@ -408,8 +516,18 @@ export function validateParameters(project: ProjectDocument): SceneWarning[] {
   const issues: SceneWarning[] = [];
   const p = project.parameters;
   const lockBottom = project.template.id === "crash-lock-carton" || project.template.id === "auto-lock-bottom";
+  const taperedBox = project.template.id === "trapezoid-box";
+  const bag = project.template.id === "bag", envelope = project.template.id === "envelope", pillow = project.template.id === "pillow-pack";
   const cartonBand = project.template.id === "tuck-end-carton" || lockBottom;
-  const activeParameters: ParameterId[] = lockBottom
+  const activeParameters: ParameterId[] = bag
+    ? ["width", "depth", "height", "topFold", "glueFlap", "clearance"]
+    : envelope
+      ? ["width", "height", "overlap", "cornerRadius"]
+      : pillow
+        ? ["width", "depth", "height", "glueFlap", "clearance"]
+        : taperedBox
+    ? ["topLength", "bottomLength", "topWidth", "bottomWidth", "height", "tuckFlap", "dustFlap", "glueFlap", "thumbHole", "clearance"]
+    : lockBottom
     ? ["width", "depth", "height", "tuckFlap", "glueFlap", "thumbHole", "cornerRadius", "clearance", "bottomFlap", "lockOverlap"]
     : project.template.id === "tuck-end-carton"
       ? ["width", "depth", "height", "tuckFlap", "dustFlap", "glueFlap", "thumbHole", "cornerRadius", "clearance"]
@@ -418,13 +536,56 @@ export function validateParameters(project: ProjectDocument): SceneWarning[] {
         : project.template.id === "cake-slice-box"
           ? ["width", "height", "lidHeight", "glueFlap", "clearance"]
           : ["width", "depth", "height", "glueFlap", "clearance"];
+  if (!cartonBand && project.construction.wallConstruction === "fold-over-lock") activeParameters.push("lockTab");
   activeParameters.forEach((id) => {
     const [min, max] = PARAMETER_LIMITS[id];
     if (p[id] < min || p[id] > max) issues.push({ id: `parameter.${id}.range`, severity: "error", parameterIds: [id], message: `${PARAMETER_LABELS[id]} must be between ${min / 1000} and ${max / 1000} mm.` });
   });
+  if (bag) {
+    if (p.topFold > p.height * .45) issues.push({ id: "bag.top-fold.too-deep", severity: "error", parameterIds: ["topFold", "height"], message: "The top reinforcement return is too deep for the bag body.", technicalDetails: "Keep the top fold at or below 45% of the finished bag height, or set it to zero to omit the return." });
+    if (p.width / 2 > p.height * .65) issues.push({ id: "bag.bottom-fold.too-deep", severity: "warning", parameterIds: ["width", "height"], message: "The derived bottom fold is unusually deep for the bag height.", technicalDetails: "The interlocking bottom depth is half the face width, matching the diagonal closure geometry." });
+    if (p.glueFlap > p.depth * .6) issues.push({ id: "bag.seam.too-wide", severity: "error", parameterIds: ["glueFlap", "depth"], message: "The bag seam is too wide for the gusset panel.", technicalDetails: "Reduce seam width or increase bag depth." });
+    return issues;
+  }
+  if (envelope) {
+    if (p.overlap > Math.min(p.width, p.height) * .45) issues.push({ id: "envelope.overlap.excessive", severity: "error", parameterIds: ["overlap", "width", "height"], message: "Envelope overlap consumes too much of the central face.", technicalDetails: "Keep overlap below 45% of the shorter finished dimension." });
+    if (p.cornerRadius * 2 >= p.width) issues.push({ id: "envelope.cover-radius.excessive", severity: "error", parameterIds: ["cornerRadius", "width"], message: "Cover-flap corner relief is wider than the envelope.", technicalDetails: "Reduce the corner radius or increase finished width." });
+    return issues;
+  }
+  if (pillow) {
+    if (p.height >= p.width / 2) issues.push({ id: "pillow.crown.invalid", severity: "error", parameterIds: ["height", "width"], message: "Pillow crown must stay below half the panel width.", technicalDetails: "Circular closure scores require a sagitta smaller than the half-chord." });
+    if (p.glueFlap > p.depth * .35) issues.push({ id: "pillow.seam.excessive", severity: "error", parameterIds: ["glueFlap", "depth"], message: "The pillow-pack seam is too wide for its body length.", technicalDetails: "Keep the seam below 35% of the pack length." });
+    return issues;
+  }
+  if (taperedBox) {
+    const lengthInset = Math.abs(p.bottomLength - p.topLength) / 2;
+    const widthInset = Math.abs(p.bottomWidth - p.topWidth) / 2;
+    const lateralEdge = Math.hypot(p.height, lengthInset, widthInset);
+    const tongueWidth = p.topLength - 2 * (p.clearance + project.material.thicknessUm * 2);
+    if (p.glueFlap > lateralEdge * .45) issues.push({ id: "tapered.corner-tab.excessive", severity: "error", parameterIds: ["glueFlap", "height", "topLength", "bottomLength"], message: "Corner tabs are too wide for the tapered wall edges.", technicalDetails: "The safe depth is 45% of the developed edge; the outer corners are additionally reduced by the selected glue angle." });
+    if (tongueWidth <= 2_000) issues.push({ id: "tapered.tuck-tongue.too-narrow", severity: "error", parameterIds: ["topLength", "clearance"], message: "The top opening is too narrow for the tuck tongue shoulders.", technicalDetails: "Increase top length or reduce board caliper or clearance." });
+    if (p.dustFlap * 2 > p.topLength - p.clearance * 2) issues.push({ id: "tapered.dust-flaps.overlap", severity: "error", parameterIds: ["dustFlap", "topLength", "clearance"], message: "The tapered dust flaps overlap across the top opening.", technicalDetails: "Keep each dust flap below half the clear top length." });
+    const lengthRatio = Math.max(p.topLength, p.bottomLength) / Math.min(p.topLength, p.bottomLength);
+    const widthRatio = Math.max(p.topWidth, p.bottomWidth) / Math.min(p.topWidth, p.bottomWidth);
+    if (Math.max(lengthRatio, widthRatio) > 2.5) issues.push({ id: "tapered.slope.extreme", severity: "warning", parameterIds: ["topLength", "bottomLength", "topWidth", "bottomWidth", "height"], message: "The top-to-bottom taper is unusually steep.", technicalDetails: "Prototype the corner joins and closure before production." });
+    return issues;
+  }
   if (!cartonBand) {
-    if (p.glueFlap > Math.min(p.height, project.template.id === "match-box" ? p.height : p.lidHeight) * .85) issues.push({ id: "tray.corner-tab.excessive", severity: "error", parameterIds: ["glueFlap", "height"], message: "Corner glue tabs exceed the available wall height.", technicalDetails: "Keep the glue tab below 85% of the shortest wall." });
+    const shortestWall = project.template.id === "match-box" ? p.height : Math.min(p.height, p.lidHeight);
+    const minimumProfileEdge = project.template.id === "cake-slice-box"
+      ? Math.min(p.width, 2 * p.width * Math.sin(project.construction.sliceAngleMilliDegrees / 2000 * Math.PI / 180))
+      : Math.min(p.width, p.depth);
+    const maximumGlueReach = Math.max(500, Math.min(shortestWall * .72, minimumProfileEdge * .42 - p.clearance));
+    if (p.glueFlap > maximumGlueReach) issues.push({ id: "tray.corner-tab.excessive", severity: "error", parameterIds: ["glueFlap", "height", "clearance"], message: "Corner glue tabs exceed the safe neighboring-wall envelope.", technicalDetails: `Maximum safe reach is ${(maximumGlueReach / 1000).toFixed(2)} mm before the selected glue angle tapers the outer edge.` });
     if (p.clearance < project.material.thicknessUm) issues.push({ id: "mating.clearance-below-caliper", severity: "warning", parameterIds: ["clearance"], message: "Mating clearance is smaller than board caliper.", technicalDetails: "The lid or sleeve may bind after folding." });
+    if (project.construction.wallConstruction !== "single-wall") {
+      if (shortestWall <= project.material.thicknessUm * 2) issues.push({ id: "fold-over.inner-wall-too-short", severity: "error", parameterIds: ["height"], message: "Wall height is too shallow for a fold-over liner.", technicalDetails: "The returned inner wall must remain taller than one board caliper after compensation." });
+      if (project.construction.wallConstruction === "fold-over-lock") {
+        if (p.lockTab > shortestWall * .6) issues.push({ id: "fold-over.return-tab-too-deep", severity: "error", parameterIds: ["lockTab", "height"], message: "The locking tab is too deep for the reinforced wall.", technicalDetails: "Keep lock engagement at or below 60% of the shortest reinforced wall." });
+        if (minimumProfileEdge <= p.clearance * 2 + 2_000) issues.push({ id: "fold-over.edge-too-short", severity: "error", parameterIds: ["width", "clearance", "lockTab"], message: "A profile edge is too short to hold a locking tab and receiving slot.", technicalDetails: "Increase the profile size or reduce slot clearance." });
+        if (p.clearance < project.material.thicknessUm * .75) issues.push({ id: "fold-over.slot-clearance-low", severity: "warning", parameterIds: ["clearance", "lockTab"], message: "Lock-slot clearance is tight for this board caliper.", technicalDetails: "A trial cut is recommended before production." });
+      }
+    }
     if (project.template.id === "box-with-lid" && p.lidHeight > Math.min(p.width, p.depth) * .6) issues.push({ id: "lid.wall-depth.excessive", severity: "warning", parameterIds: ["lidHeight"], message: "The lid wall is unusually deep for this box profile." });
     if (project.template.id === "cake-slice-box") {
       if (project.construction.sliceAngleMilliDegrees < 20_000) issues.push({ id: "cake.tip-angle.sharp", severity: "warning", parameterIds: ["width", "clearance"], message: "The slice tip is very acute for a covered tray.", technicalDetails: "A sharp lid offset creates a long miter at the tip; prototype the fit before production." });
@@ -574,22 +735,35 @@ export function generateAutoLockCarton(project: ProjectDocument): DielineScene {
   return generateCartonBand(project, "auto-lock");
 }
 
+function trayWallOptions(project: ProjectDocument) {
+  return {
+    wallConstruction: project.construction.wallConstruction,
+    materialThicknessUm: project.material.thicknessUm,
+    scoreAllowanceUm: project.material.scoreAllowanceUm,
+    lockTabUm: project.parameters.lockTab,
+    clearanceUm: project.parameters.clearance,
+    glueAngleMilliDegrees: project.construction.glueAngleMilliDegrees,
+  } as const;
+}
+
 export function generateBoxWithLid(project: ProjectDocument): DielineScene {
   const p = project.parameters;
   const base = buildRectangularTray({
     id: "base", role: "base", origin: point(p.height, p.height), lengthUm: p.width, widthUm: p.depth,
-    wallHeightUm: p.height, glueFlapUm: p.glueFlap, glueAngleMilliDegrees: project.construction.glueAngleMilliDegrees,
+    wallHeightUm: p.height, glueFlapUm: p.glueFlap,
     lengthParameter: "width", widthParameter: "depth", heightParameter: "height",
+    ...trayWallOptions(project),
   });
   const matingAllowance = project.material.thicknessUm * 2 + p.clearance * 2;
   const lidLength = um(Math.round(p.width + matingAllowance));
   const lidWidth = um(Math.round(p.depth + matingAllowance));
   const gap = 15_000;
-  const lidLeft = base.outerWidthUm + gap;
+  const lidLeft = base.bounds.maxX + gap;
   const lid = buildRectangularTray({
     id: "lid", role: "lid", origin: point(lidLeft + p.lidHeight, p.lidHeight), lengthUm: lidLength, widthUm: lidWidth,
-    wallHeightUm: p.lidHeight, glueFlapUm: p.glueFlap, glueAngleMilliDegrees: project.construction.glueAngleMilliDegrees,
+    wallHeightUm: p.lidHeight, glueFlapUm: p.glueFlap,
     lengthParameter: "width", widthParameter: "depth", heightParameter: "lidHeight",
+    ...trayWallOptions(project),
   });
   const baseX0 = p.height, baseY0 = p.height, baseX1 = baseX0 + p.width, baseY1 = baseY0 + p.depth;
   const lidX0 = lidLeft + p.lidHeight, lidY0 = p.lidHeight;
@@ -657,6 +831,7 @@ export function generateCakeSliceBox(project: ProjectDocument): DielineScene {
   const base = buildProfileTray({
     id: "base", role: "base", profile: baseProfile, wallHeightUm: p.height, glueFlapUm: p.glueFlap,
     profileParameterRefs: ["width"], heightParameter: "height",
+    ...trayWallOptions(project),
   });
 
   const lidOffset = um(project.material.thicknessUm + p.clearance);
@@ -667,6 +842,7 @@ export function generateCakeSliceBox(project: ProjectDocument): DielineScene {
   const lid = buildProfileTray({
     id: "lid", role: "lid", profile: lidProfile, wallHeightUm: p.lidHeight, glueFlapUm: p.glueFlap,
     profileParameterRefs: ["width", "clearance"], heightParameter: "lidHeight",
+    ...trayWallOptions(project),
   });
 
   const tip = baseProfile[0]!, radialEnd = baseProfile[1]!;
@@ -697,13 +873,14 @@ export function generateMatchBox(project: ProjectDocument): DielineScene {
   const caliper = project.material.thicknessUm;
   const tray = buildRectangularTray({
     id: "tray", role: "tray", origin: point(p.height, p.height), lengthUm: p.width, widthUm: p.depth,
-    wallHeightUm: p.height, glueFlapUm: p.glueFlap, glueAngleMilliDegrees: project.construction.glueAngleMilliDegrees,
+    wallHeightUm: p.height, glueFlapUm: p.glueFlap,
     lengthParameter: "width", widthParameter: "depth", heightParameter: "height",
+    ...trayWallOptions(project),
   });
   const sleeveDepth = um(Math.round(p.depth + caliper * 2 + p.clearance * 2));
   const sleeveHeight = um(Math.round(p.height + caliper + p.clearance));
   const sleeveLength = um(Math.round(p.width + caliper * 2 + p.clearance));
-  const sleeveLeft = tray.outerWidthUm + 20_000;
+  const sleeveLeft = tray.bounds.maxX + 20_000;
   const sleeveFoldX = sleeveLeft + p.glueFlap;
   const sleeve = buildPanelBand({
     id: "sleeve", role: "sleeve", origin: point(sleeveFoldX, 0), heightUm: sleeveLength, heightParameter: "width",
@@ -749,6 +926,302 @@ export function generateMatchBox(project: ProjectDocument): DielineScene {
   return scene;
 }
 
+export function generateTrapezoidBox(project: ProjectDocument): DielineScene {
+  const p = project.parameters;
+  const lengthInset = (p.bottomLength - p.topLength) / 2;
+  const widthInset = (p.bottomWidth - p.topWidth) / 2;
+  const lengthSlant = Math.hypot(p.height, lengthInset);
+  const widthSlant = Math.hypot(p.height, widthInset);
+  const origin = point(
+    lengthSlant + p.dustFlap + p.glueFlap + 20_000,
+    widthSlant + p.topWidth + project.material.thicknessUm + p.tuckFlap + p.glueFlap + 20_000,
+  );
+  const net = buildTaperedBox({
+    id: "body", origin,
+    bottomLengthUm: p.bottomLength, bottomWidthUm: p.bottomWidth,
+    topLengthUm: p.topLength, topWidthUm: p.topWidth, heightUm: p.height,
+    tuckFlapUm: p.tuckFlap, dustFlapUm: p.dustFlap, glueFlapUm: p.glueFlap,
+    thumbHoleUm: p.thumbHole, clearanceUm: p.clearance, materialThicknessUm: project.material.thicknessUm,
+    glueAngleMilliDegrees: project.construction.glueAngleMilliDegrees,
+  });
+  const heightX = net.bounds.minX - 14_000;
+  const anchors: Anchor[] = [
+    { id: "bottom.length.left", point: net.anchors.bottomTopLeft },
+    { id: "bottom.length.right", point: net.anchors.bottomTopRight },
+    { id: "bottom.width.top", point: net.anchors.bottomTopRight },
+    { id: "bottom.width.bottom", point: net.anchors.bottomBottomRight },
+    { id: "top.length.left", point: net.anchors.rearTopLeft },
+    { id: "top.length.right", point: net.anchors.rearTopRight },
+    { id: "top.width.top", point: net.anchors.leftTopStart },
+    { id: "top.width.bottom", point: net.anchors.leftTopEnd },
+    { id: "finished.height.bottom", point: point(heightX, origin.y) },
+    { id: "finished.height.top", point: point(heightX, origin.y - p.height) },
+  ];
+  const dimensions: DimensionSpec[] = [
+    { id: "dimension.bottom-length", kind: "horizontal", startAnchorId: "bottom.length.left", endAnchorId: "bottom.length.right", parameterId: "bottomLength", label: "Bottom length", valueUm: p.bottomLength, offsetUm: um(12_000), dragDirection: "x", dragSign: 1 },
+    { id: "dimension.bottom-width", kind: "vertical", startAnchorId: "bottom.width.top", endAnchorId: "bottom.width.bottom", parameterId: "bottomWidth", label: "Bottom width", valueUm: p.bottomWidth, offsetUm: um(-12_000), dragDirection: "y", dragSign: 1 },
+    { id: "dimension.top-length", kind: "horizontal", startAnchorId: "top.length.left", endAnchorId: "top.length.right", parameterId: "topLength", label: "Top length", valueUm: p.topLength, offsetUm: um(-12_000), dragDirection: "x", dragSign: 1 },
+    { id: "dimension.top-width", kind: "vertical", startAnchorId: "top.width.top", endAnchorId: "top.width.bottom", parameterId: "topWidth", label: "Top width", valueUm: p.topWidth, offsetUm: um(-12_000), dragDirection: "y", dragSign: 1 },
+    { id: "dimension.finished-height", kind: "vertical", startAnchorId: "finished.height.top", endAnchorId: "finished.height.bottom", parameterId: "height", label: "Height", valueUm: p.height, offsetUm: um(-10_000), dragDirection: "y", dragSign: 1 },
+  ];
+  const scene: DielineScene = {
+    version: 2, paths: [...net.paths], anchors, dimensions, parts: [net.part], faces: [...net.faces],
+    foldGraph: { connections: [...net.folds] }, bounds: calculateBounds([...net.paths]), warnings: validateParameters(project),
+  };
+  assertSceneIntegrity(scene);
+  return scene;
+}
+
+export function generateBag(project: ProjectDocument): DielineScene {
+  const p = project.parameters;
+  const xFold = p.glueFlap + 15_000;
+  const bottomDepth = p.width / 2;
+  const yOuterBottom = 15_000, yBodyTop = yOuterBottom + bottomDepth;
+  const yBodyBottom = yBodyTop + p.height, yOuterTop = yBodyBottom + p.topFold;
+  const panelSpecs = [
+    { id: "side-a", widthUm: p.depth, widthParameter: "depth" as const },
+    { id: "front", widthUm: p.width, widthParameter: "width" as const },
+    { id: "side-b", widthUm: p.depth, widthParameter: "depth" as const },
+    { id: "back", widthUm: p.width, widthParameter: "width" as const },
+  ];
+  const band = buildPanelBand({ id: "body", role: "shell", origin: point(xFold, yBodyTop), heightUm: p.height, heightParameter: "height", panels: panelSpecs, rightFreeEdgePathId: "body.back.free-edge.cut" });
+  const faces: NetFace[] = [...band.faces];
+  const folds: FoldConnection[] = [...band.folds];
+  const paths: DielinePath[] = band.paths.filter((path) => path.id !== "body.back.free-edge.cut");
+  const seamOuter = xFold - p.glueFlap;
+  const xRight = xFold + p.depth * 2 + p.width * 2;
+  const seamId = "body.glue-seam";
+  faces.push({ id: seamId, partId: "body", boundary: [point(seamOuter, yBodyTop), point(xFold, yBodyTop), point(xFold, yBodyBottom), point(seamOuter, yBodyBottom)], parameterRefs: ["glueFlap", "height"] });
+  paths.push(
+    partPath("body", `${seamId}.fold`, "crease", ["glueFlap", "height"], [move(xFold, yBodyTop), line(xFold, yBodyBottom)]),
+    partPath("body", `${seamId}.area`, "glue-boundary", ["glueFlap", "height"], [move(seamOuter, yBodyTop), line(xFold, yBodyTop), line(xFold, yBodyBottom), line(seamOuter, yBodyBottom), { op: "close" }]),
+  );
+  folds.push({ id: `${seamId}.fold`, partId: "body", faceAId: seamId, faceBId: "body.side-a", edge: [point(xFold, yBodyTop), point(xFold, yBodyBottom)], parameterRefs: ["glueFlap", "height"], foldSense: "valley" });
+
+  let panelX = xFold;
+  panelSpecs.forEach((panel, index) => {
+    const nextX = panelX + panel.widthUm;
+    const flapId = `body.bottom-flap.${index + 1}`;
+    const boundary = [point(panelX, yOuterBottom), point(nextX, yOuterBottom), point(nextX, yBodyTop), point(panelX, yBodyTop)];
+    faces.push({ id: flapId, partId: "body", boundary, parameterRefs: [panel.widthParameter, "width"] });
+    paths.push(
+      partPath("body", `${flapId}.fold`, "crease", [panel.widthParameter, "width"], [move(panelX, yBodyTop), line(nextX, yBodyTop)]),
+    );
+    folds.push({ id: `${flapId}.fold`, partId: "body", faceAId: `body.${panel.id}`, faceBId: flapId, edge: [point(panelX, yBodyTop), point(nextX, yBodyTop)], parameterRefs: [panel.widthParameter, "width"], foldSense: "mountain" });
+    if (panel.id.startsWith("side")) {
+      const centerX = (panelX + nextX) / 2;
+      const gussetY = yBodyTop + p.depth / 2;
+      paths.push(
+        partPath("body", `body.${panel.id}.bottom.center.fold`, "crease", ["depth", "width"], [move(centerX, yOuterBottom), line(centerX, yBodyTop)]),
+        partPath("body", `body.${panel.id}.gusset.center.fold`, "crease", ["depth"], [move(centerX, gussetY), line(centerX, yBodyBottom)]),
+        partPath("body", `body.${panel.id}.gusset.left.diagonal`, "crease", ["depth"], [move(panelX, yBodyTop), line(centerX, gussetY)]),
+        partPath("body", `body.${panel.id}.gusset.right.diagonal`, "crease", ["depth"], [move(nextX, yBodyTop), line(centerX, gussetY)]),
+        partPath("body", `body.${panel.id}.gusset.shoulder.fold`, "crease", ["depth"], [move(centerX, gussetY), line(nextX, gussetY)]),
+      );
+    } else {
+      const centerX = (panelX + nextX) / 2;
+      paths.push(
+        partPath("body", `body.${panel.id}.bottom.left.diagonal`, "crease", ["width"], [move(panelX, yBodyTop), line(centerX, yOuterBottom)]),
+        partPath("body", `body.${panel.id}.bottom.right.diagonal`, "crease", ["width"], [move(nextX, yBodyTop), line(centerX, yOuterBottom)]),
+      );
+    }
+    panelX = nextX;
+  });
+
+  paths.push(partPath("body", "body.glue-seam.bottom.diagonal", "crease", ["glueFlap", "width"], [move(xFold, yBodyTop), line(seamOuter, Math.max(yOuterBottom, yBodyTop - p.glueFlap))]));
+
+  if (p.topFold > 0) {
+    let topX = xFold;
+    const topFaceIds: string[] = [];
+    panelSpecs.forEach((panel, index) => {
+      const nextX = topX + panel.widthUm;
+      const faceId = `body.top-return.${index + 1}`;
+      topFaceIds.push(faceId);
+      faces.push({ id: faceId, partId: "body", boundary: [point(topX, yBodyBottom), point(nextX, yBodyBottom), point(nextX, yOuterTop), point(topX, yOuterTop)], parameterRefs: [panel.widthParameter, "topFold"] });
+      paths.push(partPath("body", `${faceId}.fold`, "crease", [panel.widthParameter, "topFold"], [move(topX, yBodyBottom), line(nextX, yBodyBottom)]));
+      folds.push({ id: `${faceId}.fold`, partId: "body", faceAId: `body.${panel.id}`, faceBId: faceId, edge: [point(topX, yBodyBottom), point(nextX, yBodyBottom)], parameterRefs: [panel.widthParameter, "topFold"], foldSense: "valley" });
+      if (index > 0) {
+        const previousId = topFaceIds[index - 1]!;
+        paths.push(partPath("body", `${previousId}.to.${faceId}.fold`, "crease", ["topFold"], [move(topX, yBodyBottom), line(topX, yOuterTop)]));
+        folds.push({ id: `${previousId}.to.${faceId}.fold`, partId: "body", faceAId: previousId, faceBId: faceId, edge: [point(topX, yBodyBottom), point(topX, yOuterTop)], parameterRefs: ["topFold"], foldSense: "unspecified" });
+      }
+      if (panel.id.startsWith("side")) {
+        const centerX = (topX + nextX) / 2;
+        paths.push(partPath("body", `${faceId}.center.fold`, "crease", ["depth", "topFold"], [move(centerX, yBodyBottom), line(centerX, yOuterTop)]));
+      }
+      topX = nextX;
+    });
+    const seamTopId = "body.top-return.seam";
+    faces.push({ id: seamTopId, partId: "body", boundary: [point(seamOuter, yBodyBottom), point(xFold, yBodyBottom), point(xFold, yOuterTop), point(seamOuter, yOuterTop)], parameterRefs: ["glueFlap", "topFold"] });
+    paths.push(partPath("body", `${seamTopId}.fold`, "crease", ["glueFlap", "topFold"], [move(seamOuter, yBodyBottom), line(xFold, yBodyBottom)]));
+    folds.push({ id: `${seamTopId}.fold`, partId: "body", faceAId: seamId, faceBId: seamTopId, edge: [point(seamOuter, yBodyBottom), point(xFold, yBodyBottom)], parameterRefs: ["glueFlap", "topFold"], foldSense: "valley" });
+  }
+
+  paths.push(partPath("body", "body.outline.cut", "outer-cut", ["width", "depth", "height", "topFold", "glueFlap"], [
+    move(seamOuter, yOuterBottom), line(xRight, yOuterBottom), line(xRight, yOuterTop), line(seamOuter, yOuterTop), { op: "close" },
+  ]));
+  const part: NetPart = { id: "body", role: "shell", faceIds: faces.map((face) => face.id) };
+  assertNetTopology([part], faces, folds);
+  const anchors: Anchor[] = [
+    { id: "bag.depth.left", point: point(xFold, yBodyTop) }, { id: "bag.depth.right", point: point(xFold + p.depth, yBodyTop) },
+    { id: "bag.width.left", point: point(xFold + p.depth, yBodyTop) }, { id: "bag.width.right", point: point(xFold + p.depth + p.width, yBodyTop) },
+    { id: "bag.height.top", point: point(xRight, yBodyTop) }, { id: "bag.height.bottom", point: point(xRight, yBodyBottom) },
+    { id: "bag.top-fold.inner", point: point(seamOuter, yBodyBottom) }, { id: "bag.top-fold.outer", point: point(seamOuter, yOuterTop) },
+  ];
+  const dimensions: DimensionSpec[] = [
+    { id: "dimension.bag-width", kind: "horizontal", startAnchorId: "bag.width.left", endAnchorId: "bag.width.right", parameterId: "width", label: "Face width", valueUm: p.width, offsetUm: um(-10_000), dragDirection: "x", dragSign: 1 },
+    { id: "dimension.bag-depth", kind: "horizontal", startAnchorId: "bag.depth.left", endAnchorId: "bag.depth.right", parameterId: "depth", label: "Bag depth", valueUm: p.depth, offsetUm: um(-7_000), dragDirection: "x", dragSign: 1 },
+    { id: "dimension.bag-height", kind: "vertical", startAnchorId: "bag.height.top", endAnchorId: "bag.height.bottom", parameterId: "height", label: "Height", valueUm: p.height, offsetUm: um(12_000), dragDirection: "y", dragSign: 1 },
+    { id: "dimension.bag-top-fold", kind: "vertical", startAnchorId: "bag.top-fold.inner", endAnchorId: "bag.top-fold.outer", parameterId: "topFold", label: "Top fold", valueUm: p.topFold, offsetUm: um(-12_000), dragDirection: "y", dragSign: 1 },
+  ];
+  const scene: DielineScene = { version: 2, paths, anchors, dimensions, parts: [part], faces, foldGraph: { connections: folds }, bounds: calculateBounds(paths), warnings: validateParameters(project) };
+  assertSceneIntegrity(scene); return scene;
+}
+
+function roundedTipCommands(points: readonly PointUm[], roundedIndices: ReadonlySet<number>, radiusUm: number): PathCommand[] {
+  const commands: PathCommand[] = [move(points[0]!.x, points[0]!.y)];
+  const area2 = points.reduce((sum, current, index) => {
+    const next = points[(index + 1) % points.length]!;
+    return sum + current.x * next.y - next.x * current.y;
+  }, 0);
+  for (let index = 1; index <= points.length; index += 1) {
+    const pointIndex = index % points.length;
+    const current = points[pointIndex]!;
+    if (!roundedIndices.has(pointIndex) || radiusUm <= 0) {
+      commands.push(line(current.x, current.y));
+      continue;
+    }
+    const previous = points[(pointIndex - 1 + points.length) % points.length]!;
+    const next = points[(pointIndex + 1) % points.length]!;
+    const incomingLength = Math.hypot(previous.x - current.x, previous.y - current.y);
+    const outgoingLength = Math.hypot(next.x - current.x, next.y - current.y);
+    const u1 = { x: (previous.x - current.x) / incomingLength, y: (previous.y - current.y) / incomingLength };
+    const u2 = { x: (next.x - current.x) / outgoingLength, y: (next.y - current.y) / outgoingLength };
+    const angle = Math.acos(Math.max(-1, Math.min(1, u1.x * u2.x + u1.y * u2.y)));
+    const radius = Math.min(radiusUm, incomingLength * .24, outgoingLength * .24);
+    const tangentDistance = Math.min(radius / Math.tan(angle / 2), incomingLength * .4, outgoingLength * .4);
+    const tangentIn = point(current.x + u1.x * tangentDistance, current.y + u1.y * tangentDistance);
+    const tangentOut = point(current.x + u2.x * tangentDistance, current.y + u2.y * tangentDistance);
+    const bisectorLength = Math.hypot(u1.x + u2.x, u1.y + u2.y);
+    const centerDistance = radius / Math.sin(angle / 2);
+    const center = point(current.x + (u1.x + u2.x) / bisectorLength * centerDistance, current.y + (u1.y + u2.y) / bisectorLength * centerDistance);
+    const start = Math.atan2(tangentIn.y - center.y, tangentIn.x - center.x) * 180 / Math.PI;
+    let sweep = Math.atan2(tangentOut.y - center.y, tangentOut.x - center.x) * 180 / Math.PI - start;
+    if (area2 > 0 && sweep < 0) sweep += 360;
+    if (area2 < 0 && sweep > 0) sweep -= 360;
+    if (Math.abs(sweep) > 180) sweep += sweep > 0 ? -360 : 360;
+    commands.push(line(tangentIn.x, tangentIn.y), { op: "arc", center, radiusUm: um(Math.round(radius)), startMilliDegrees: Math.round(start * 1000), sweepMilliDegrees: Math.round(sweep * 1000) });
+  }
+  commands.push({ op: "close" });
+  return commands;
+}
+
+export function generateEnvelope(project: ProjectDocument): DielineScene {
+  const p = project.parameters;
+  const sideDepth = (p.width + p.overlap) / 2;
+  const coverDepth = p.height * .62 + p.overlap / 2;
+  const bottomDepth = p.height + p.overlap - coverDepth;
+  const margin = Math.max(sideDepth, coverDepth, bottomDepth) + 15_000;
+  const x0 = margin, y0 = margin, x1 = x0 + p.width, y1 = y0 + p.height;
+  const centerX = (x0 + x1) / 2, centerY = (y0 + y1) / 2;
+  const radius = Math.min(p.cornerRadius, p.width * .12, p.height * .18);
+  const points = {
+    tl: point(x0, y0), tr: point(x1, y0), br: point(x1, y1), bl: point(x0, y1),
+    left: point(x0 - sideDepth, centerY), right: point(x1 + sideDepth, centerY),
+    cover: point(centerX, y0 - coverDepth), bottom: point(centerX, y1 + bottomDepth),
+  };
+  const faces: NetFace[] = [
+    { id: "body.face", partId: "body", boundary: [points.tl, points.tr, points.br, points.bl], parameterRefs: ["width", "height"] },
+    { id: "body.flap.left", partId: "body", boundary: [points.tl, points.bl, points.left], parameterRefs: ["width", "height", "overlap"] },
+    { id: "body.flap.right", partId: "body", boundary: [points.br, points.tr, points.right], parameterRefs: ["width", "height", "overlap"] },
+    { id: "body.flap.cover", partId: "body", boundary: [points.tr, points.tl, points.cover], parameterRefs: ["width", "height", "overlap", "cornerRadius"] },
+    { id: "body.flap.bottom", partId: "body", boundary: [points.bl, points.br, points.bottom], parameterRefs: ["width", "height", "overlap", "cornerRadius"] },
+  ];
+  const foldDefs = [
+    ["body.flap.left.fold", "body.flap.left", points.tl, points.bl, ["height", "overlap"] as ParameterId[]],
+    ["body.flap.right.fold", "body.flap.right", points.br, points.tr, ["height", "overlap"] as ParameterId[]],
+    ["body.flap.cover.fold", "body.flap.cover", points.tr, points.tl, ["width", "cornerRadius"] as ParameterId[]],
+    ["body.flap.bottom.fold", "body.flap.bottom", points.bl, points.br, ["width", "overlap"] as ParameterId[]],
+  ] as const;
+  const outlinePoints = [points.tl, points.cover, points.tr, points.right, points.br, points.bottom, points.bl, points.left];
+  const glueInset = Math.min(p.overlap, p.width * .12);
+  const bottomLeftInner = point(points.bl.x + glueInset, points.bl.y + glueInset * .35);
+  const bottomRightInner = point(points.br.x - glueInset, points.br.y + glueInset * .35);
+  const bottomTipLeft = point(points.bottom.x - glueInset, points.bottom.y - glueInset);
+  const bottomTipRight = point(points.bottom.x + glueInset, points.bottom.y - glueInset);
+  const paths: DielinePath[] = [
+    partPath("body", "body.outline.cut", "outer-cut", ["width", "height", "overlap", "cornerRadius"], roundedTipCommands(outlinePoints, new Set([1, 3, 5, 7]), radius)),
+    partPath("body", "body.flap.bottom.left.glue-area", "glue-boundary", ["overlap", "height"], [move(points.bl.x, points.bl.y), line(points.bottom.x, points.bottom.y), line(bottomTipLeft.x, bottomTipLeft.y), line(bottomLeftInner.x, bottomLeftInner.y), { op: "close" }]),
+    partPath("body", "body.flap.bottom.right.glue-area", "glue-boundary", ["overlap", "height"], [move(points.br.x, points.br.y), line(bottomRightInner.x, bottomRightInner.y), line(bottomTipRight.x, bottomTipRight.y), line(points.bottom.x, points.bottom.y), { op: "close" }]),
+  ];
+  const folds: FoldConnection[] = foldDefs.map(([id, faceBId, a, b, refs]) => {
+    paths.push(partPath("body", id, "crease", [...refs], [move(a.x, a.y), line(b.x, b.y)]));
+    return { id, partId: "body", faceAId: "body.face", faceBId, edge: [a, b] as const, parameterRefs: refs, foldSense: "valley" as const };
+  });
+  const part: NetPart = { id: "body", role: "shell", faceIds: faces.map((face) => face.id) };
+  assertNetTopology([part], faces, folds);
+  const anchors: Anchor[] = [
+    { id: "envelope.width.left", point: points.tl }, { id: "envelope.width.right", point: points.tr },
+    { id: "envelope.height.top", point: points.tr }, { id: "envelope.height.bottom", point: points.br },
+  ];
+  const dimensions: DimensionSpec[] = [
+    { id: "dimension.envelope-width", kind: "horizontal", startAnchorId: "envelope.width.left", endAnchorId: "envelope.width.right", parameterId: "width", label: "Envelope width", valueUm: p.width, offsetUm: um(10_000), dragDirection: "x", dragSign: 1 },
+    { id: "dimension.envelope-height", kind: "vertical", startAnchorId: "envelope.height.top", endAnchorId: "envelope.height.bottom", parameterId: "height", label: "Envelope height", valueUm: p.height, offsetUm: um(-10_000), dragDirection: "y", dragSign: 1 },
+  ];
+  const scene: DielineScene = { version: 2, paths, anchors, dimensions, parts: [part], faces, foldGraph: { connections: folds }, bounds: calculateBounds(paths), warnings: validateParameters(project) };
+  assertSceneIntegrity(scene); return scene;
+}
+
+function pillowArcPath(id: string, xStart: number, xEnd: number, y: number, sagitta: number, direction: -1 | 1): DielinePath {
+  const chord = xEnd - xStart;
+  const radius = chord * chord / (8 * sagitta) + sagitta / 2;
+  const offset = radius - sagitta;
+  const theta = Math.atan2(offset, chord / 2) * 180 / Math.PI;
+  const startDegrees = direction === 1 ? 180 - theta : 180 + theta;
+  const sweepDegrees = direction === 1 ? -(180 - theta * 2) : 180 - theta * 2;
+  const centerY = y + direction * (sagitta - radius);
+  return { id, partId: "body", role: "crease", parameterRefs: ["width", "height"], manufacturable: true, commands: [move(xStart, y), { op: "arc", center: point((xStart + xEnd) / 2, centerY), radiusUm: um(Math.round(radius)), startMilliDegrees: Math.round(startDegrees * 1000), sweepMilliDegrees: Math.round(sweepDegrees * 1000) }] };
+}
+
+export function generatePillowPack(project: ProjectDocument): DielineScene {
+  const p = project.parameters;
+  const xFold = p.glueFlap + 15_000, yTop = p.height + 15_000, yBottom = yTop + p.depth;
+  const band = buildPanelBand({ id: "body", role: "shell", origin: point(xFold, yTop), heightUm: p.depth, heightParameter: "depth", panels: [{ id: "front", widthUm: p.width, widthParameter: "width" }, { id: "back", widthUm: p.width, widthParameter: "width" }], rightFreeEdgePathId: "body.back.free-edge.cut" });
+  const faces: NetFace[] = [...band.faces];
+  const folds: FoldConnection[] = [...band.folds];
+  const paths: DielinePath[] = [...band.paths];
+  const seamOuter = xFold - p.glueFlap, xRight = xFold + p.width * 2;
+  const seamId = "body.glue-seam";
+  faces.push({ id: seamId, partId: "body", boundary: [point(xFold, yTop), point(xFold, yBottom), point(seamOuter, yBottom - p.clearance), point(seamOuter, yTop + p.clearance)], parameterRefs: ["glueFlap", "depth", "clearance"] });
+  paths.push(
+    partPath("body", `${seamId}.cut`, "outer-cut", ["glueFlap", "depth", "clearance"], [move(xFold, yTop), line(seamOuter, yTop + p.clearance), line(seamOuter, yBottom - p.clearance), line(xFold, yBottom)]),
+    partPath("body", `${seamId}.fold`, "crease", ["glueFlap", "depth"], [move(xFold, yTop), line(xFold, yBottom)]),
+    partPath("body", `${seamId}.area`, "glue-boundary", ["glueFlap", "depth"], [move(xFold, yTop), line(xFold, yBottom), line(seamOuter, yBottom - p.clearance), line(seamOuter, yTop + p.clearance), { op: "close" }]),
+    partPath("body", "body.top.cut", "outer-cut", ["width", "glueFlap"], [move(seamOuter, yTop + p.clearance), line(xFold, yTop), line(xRight, yTop)]),
+    partPath("body", "body.bottom.cut", "outer-cut", ["width", "glueFlap"], [move(xRight, yBottom), line(xFold, yBottom), line(seamOuter, yBottom - p.clearance)]),
+  );
+  folds.push({ id: `${seamId}.fold`, partId: "body", faceAId: seamId, faceBId: "body.front", edge: [point(xFold, yTop), point(xFold, yBottom)], parameterRefs: ["glueFlap", "depth"], foldSense: "valley" });
+  for (let panel = 0; panel < 2; panel += 1) {
+    const xa = xFold + panel * p.width, xb = xa + p.width;
+    paths.push(pillowArcPath(`body.panel.${panel + 1}.top.arc-score`, xa, xb, yTop, p.height, 1));
+    paths.push(pillowArcPath(`body.panel.${panel + 1}.bottom.arc-score`, xa, xb, yBottom, p.height, -1));
+  }
+  const part: NetPart = { id: "body", role: "shell", faceIds: faces.map((face) => face.id) };
+  assertNetTopology([part], faces, folds);
+  const anchors: Anchor[] = [
+    { id: "pillow.width.left", point: point(xFold, yTop) }, { id: "pillow.width.right", point: point(xFold + p.width, yTop) },
+    { id: "pillow.length.top", point: point(xRight, yTop) }, { id: "pillow.length.bottom", point: point(xRight, yBottom) },
+    { id: "pillow.crown.flat", point: point(xFold + p.width / 2, yTop) }, { id: "pillow.crown.tip", point: point(xFold + p.width / 2, yTop + p.height) },
+  ];
+  const dimensions: DimensionSpec[] = [
+    { id: "dimension.pillow-width", kind: "horizontal", startAnchorId: "pillow.width.left", endAnchorId: "pillow.width.right", parameterId: "width", label: "Pack width", valueUm: p.width, offsetUm: um(-10_000), dragDirection: "x", dragSign: 1 },
+    { id: "dimension.pillow-length", kind: "vertical", startAnchorId: "pillow.length.top", endAnchorId: "pillow.length.bottom", parameterId: "depth", label: "Pack length", valueUm: p.depth, offsetUm: um(12_000), dragDirection: "y", dragSign: 1 },
+    { id: "dimension.pillow-crown", kind: "vertical", startAnchorId: "pillow.crown.flat", endAnchorId: "pillow.crown.tip", parameterId: "height", label: "Crown", valueUm: p.height, offsetUm: um(-10_000), dragDirection: "y", dragSign: 1 },
+  ];
+  const scene: DielineScene = { version: 2, paths, anchors, dimensions, parts: [part], faces, foldGraph: { connections: folds }, bounds: calculateBounds(paths), warnings: validateParameters(project) };
+  assertSceneIntegrity(scene); return scene;
+}
+
 const PROJECT_GENERATORS: Record<TemplateId, (document: ProjectDocument) => DielineScene> = {
   "tuck-end-carton": generateTuckCarton,
   "crash-lock-carton": generateCrashLockCarton,
@@ -756,6 +1229,10 @@ const PROJECT_GENERATORS: Record<TemplateId, (document: ProjectDocument) => Diel
   "box-with-lid": generateBoxWithLid,
   "match-box": generateMatchBox,
   "cake-slice-box": generateCakeSliceBox,
+  "trapezoid-box": generateTrapezoidBox,
+  bag: generateBag,
+  envelope: generateEnvelope,
+  "pillow-pack": generatePillowPack,
 };
 
 export function generateProjectScene(project: ProjectDocument): DielineScene {
@@ -774,7 +1251,8 @@ export function assertSceneIntegrity(scene: DielineScene): void {
       if (command.op === "arc") {
         if (!Number.isSafeInteger(command.center.x) || !Number.isSafeInteger(command.center.y) || command.radiusUm <= 0) throw new Error(`Invalid arc in ${pathValue.id}`);
         const start = arcPoint(command, false);
-        if (previous && Math.hypot(previous.x - start.x, previous.y - start.y) > 2) throw new Error(`Disconnected arc in ${pathValue.id}`);
+        const angularQuantizationTolerance = Math.max(2, Math.ceil(command.radiusUm * Math.PI / 180_000));
+        if (previous && Math.hypot(previous.x - start.x, previous.y - start.y) > angularQuantizationTolerance) throw new Error(`Disconnected arc in ${pathValue.id}`);
         previous = arcPoint(command, true);
         continue;
       }
@@ -807,8 +1285,10 @@ export function calculateSheetFit(scene: DielineScene, project: ProjectDocument)
 export const ROLE_LABELS: Record<LineRole, string> = { "outer-cut": "Cut", "internal-cut": "Lock cuts", crease: "Crease", perforation: "Perforation", "glue-boundary": "Glue area", annotation: "Dimensions" };
 export const PARAMETER_LABELS: Record<ParameterId, string> = {
   width: "Width", depth: "Depth", height: "Height", lidHeight: "Lid height", tuckFlap: "Tuck tongue", dustFlap: "Dust flap", glueFlap: "Glue flap",
-  thumbHole: "Thumb notch", cornerRadius: "Tuck radius", clearance: "Flap clearance",
-  bottomFlap: "Bottom flap", lockOverlap: "Lock overlap",
+  topLength: "Top length", bottomLength: "Bottom length", topWidth: "Top width", bottomWidth: "Bottom width",
+  thumbHole: "Thumb notch", cornerRadius: "Corner radius", clearance: "Flap clearance",
+  bottomFlap: "Bottom flap", lockOverlap: "Lock overlap", lockTab: "Lock tab depth",
+  gusset: "Legacy gusset depth", topFold: "Top reinforcement fold", overlap: "Overlap",
 };
 
 export function pointMm(value: Micrometres): number { return value / 1000; }
